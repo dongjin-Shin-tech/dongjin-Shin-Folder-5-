@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>가족 연간 가계부</title>
+<style>
+  body { font-family: sans-serif; margin: 20px; background: #f5f5f5; }
+  h1 { text-align: center; }
+  table { border-collapse: collapse; margin: 10px 0; background: #fff; }
+  th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: right; }
+  th { background: #e8e8e8; }
+  td:first-child, th:first-child { text-align: center; background: #f0f0f0; }
+  input { width: 70px; text-align: right; border: none; }
+  input:focus { background: #fffbd1; outline: none; }
+  .section { background:#fff; padding:10px; margin-bottom:20px; border-radius:8px; }
+  .total { background: #d9edf7; font-weight: bold; }
+  canvas { background: #fff; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<h1>📒 가족 연간 가계부</h1>
+
+<div class="section">
+  <h2>수입</h2>
+  <table id="incomeTable"></table>
+</div>
+
+<div class="section">
+  <h2>지출</h2>
+  <table id="expenseTable"></table>
+</div>
+
+<div class="section">
+  <h2>월별 요약</h2>
+  <table id="summaryTable"></table>
+</div>
+
+<div class="section">
+  <h2>월별 수입·지출 그래프</h2>
+  <canvas id="chart" width="760" height="300"></canvas>
+</div>
+
+<script>
+// ===== 설정 =====
+const months = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+const incomeCats = ['급여','부수입','기타수입'];
+const expenseCats = ['식비','주거','공과금','교통','통신','의료','교육','문화','의류','생활용품','경조사','기타'];
+
+// ===== 데이터 (저장된 값 불러오기) =====
+let data = JSON.parse(localStorage.getItem('budget')) || {
+  income: months.map(() => incomeCats.map(() => 0)),
+  expense: months.map(() => expenseCats.map(() => 0))
+};
+
+// ===== 숫자 포맷 =====
+function fmt(n) { return n.toLocaleString('ko-KR'); }
+
+// ===== 입력 표 만들기 =====
+function buildTable(tableId, cats, type) {
+  const table = document.getElementById(tableId);
+  // 헤더
+  let html = '<tr><th>월</th>';
+  cats.forEach(c => html += `<th>${c}</th>`);
+  html += '<th>합계</th></tr>';
+  // 각 월 행
+  months.forEach((m, mi) => {
+    html += `<tr><td>${m}</td>`;
+    cats.forEach((c, ci) => {
+      const val = data[type][mi][ci];
+      html += `<td><input type="number" min="0"
+        data-type="${type}" data-month="${mi}" data-cat="${ci}"
+        value="${val}"></td>`;
+    });
+    html += `<td class="rowsum" id="${type}-rowsum-${mi}">0</td></tr>`;
+  });
+  // 카테고리별 합계 행
+  html += '<tr class="total"><td>합계</td>';
+  cats.forEach((c, ci) => html += `<td id="${type}-colsum-${ci}">0</td>`);
+  html += `<td id="${type}-grandsum">0</td></tr>`;
+  table.innerHTML = html;
+}
+
+// ===== 입력값 변경 처리 =====
+function onInput(e) {
+  const t = e.target;
+  if (t.tagName !== 'INPUT') return;
+  const type = t.dataset.type;
+  const mi = +t.dataset.month;
+  const ci = +t.dataset.cat;
+  let v = parseInt(t.value, 10);
+  if (isNaN(v) || v < 0) v = 0;   // 음수·빈값 방지
+  data[type][mi][ci] = v;
+  save();
+  calcAll();
+}
+
+// ===== 계산 =====
+function calcAll() {
+  ['income','expense'].forEach(type => {
+    const cats = type === 'income' ? incomeCats : expenseCats;
+    let grand = 0;
+    const colSums = cats.map(() => 0);
+    months.forEach((m, mi) => {
+      let rowSum = 0;
+      cats.forEach((c, ci) => {
+        const v = data[type][mi][ci];
+        rowSum += v;
+        colSums[ci] += v;
+      });
+      document.getElementById(`${type}-rowsum-${mi}`).textContent = fmt(rowSum);
+      grand += rowSum;
+    });
+    cats.forEach((c, ci) => {
+      document.getElementById(`${type}-colsum-${ci}`).textContent = fmt(colSums[ci]);
+    });
+    document.getElementById(`${type}-grandsum`).textContent = fmt(grand);
+  });
+  renderSummary();
+  drawChart();
+}
+
+// ===== 월별 요약 표 =====
+function renderSummary() {
+  const table = document.getElementById('summaryTable');
+  let html = '<tr><th>월</th><th>수입</th><th>지출</th><th>차액</th></tr>';
+  let totalIn = 0, totalOut = 0;
+  months.forEach((m, mi) => {
+    const inSum = data.income[mi].reduce((a,b) => a+b, 0);
+    const outSum = data.expense[mi].reduce((a,b) => a+b, 0);
+    const diff = inSum - outSum;
+    totalIn += inSum; totalOut += outSum;
+    const color = diff < 0 ? 'color:red' : '';
+    html += `<tr><td>${m}</td><td>${fmt(inSum)}</td><td>${fmt(outSum)}</td>
+      <td style="${color}">${fmt(diff)}</td></tr>`;
+  });
+  const totalDiff = totalIn - totalOut;
+  const dColor = totalDiff < 0 ? 'color:red' : '';
+  html += `<tr class="total"><td>연간</td><td>${fmt(totalIn)}</td>
+    <td>${fmt(totalOut)}</td><td style="${dColor}">${fmt(totalDiff)}</td></tr>`;
+  // 월 평균 (12개월 기준)
+  html += `<tr><td>월평균</td><td>${fmt(Math.round(totalIn/12))}</td>
+    <td>${fmt(Math.round(totalOut/12))}</td>
+    <td>${fmt(Math.round(totalDiff/12))}</td></tr>`;
+  table.innerHTML = html;
+}
+
+// ===== 그래프 그리기 =====
+function drawChart() {
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // 월별 수입·지출 합계
+  const ins = months.map((m, mi) => data.income[mi].reduce((a,b)=>a+b,0));
+  const outs = months.map((m, mi) => data.expense[mi].reduce((a,b)=>a+b,0));
+  const maxVal = Math.max(1, ...ins, ...outs);
+
+  const padding = 40;
+  const chartW = W - padding * 2;
+  const chartH = H - padding * 2;
+  const groupW = chartW / 12;
+  const barW = groupW / 3;
+
+  // 축
+  ctx.strokeStyle = '#999';
+  ctx.beginPath();
+  ctx.moveTo(padding, padding);
+  ctx.lineTo(padding, H - padding);
+  ctx.lineTo(W - padding, H - padding);
+  ctx.stroke();
+
+  // 막대
+  months.forEach((m, i) => {
+    const x = padding + groupW * i;
+    const inH = (ins[i] / maxVal) * chartH;
+    const outH = (outs[i] / maxVal) * chartH;
+    // 수입(파랑)
+    ctx.fillStyle = '#4a90d9';
+    ctx.fillRect(x + barW*0.3, H - padding - inH, barW, inH);
+    // 지출(빨강)
+    ctx.fillStyle = '#e06666';
+    ctx.fillRect(x + barW*1.4, H - padding - outH, barW, outH);
+    // 월 라벨
+    ctx.fillStyle = '#333';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(i+1, x + groupW/2, H - padding + 14);
+  });
+
+  // 범례
+  ctx.fillStyle = '#4a90d9';
+  ctx.fillRect(W - 140, 10, 12, 12);
+  ctx.fillStyle = '#333';
+  ctx.textAlign = 'left';
+  ctx.fillText('수입', W - 124, 20);
+  ctx.fillStyle = '#e06666';
+  ctx.fillRect(W - 80, 10, 12, 12);
+  ctx.fillStyle = '#333';
+  ctx.fillText('지출', W - 64, 20);
+}
+
+// ===== 저장 =====
+function save() {
+  localStorage.setItem('budget', JSON.stringify(data));
+}
+
+// ===== 초기 실행 =====
+buildTable('incomeTable', incomeCats, 'income');
+buildTable('expenseTable', expenseCats, 'expense');
+document.addEventListener('input', onInput);
+calcAll();
+</script>
+</body>
+</html>
